@@ -1,0 +1,559 @@
+-- Converter teclas de string para KeyCode
+local function stringToKeyCode(keyString)
+    return Enum.KeyCode[keyString]
+end
+
+-- Converter arrays RGB para Color3
+local function rgbToColor3(rgbArray)
+    return Color3.fromRGB(rgbArray[1], rgbArray[2], rgbArray[3])
+end
+
+-- Serviços
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Camera = workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+
+-- Configurações processadas
+local ESP_ENABLED = _G.ESPAimConfig.ESP.Enabled
+local ESP_TOGGLE_KEY = stringToKeyCode(_G.ESPAimConfig.ESP.ToggleKey)
+local SHOW_ALLIES_ESP = _G.ESPAimConfig.ESP.ShowAllies
+
+local AIMBOT_ENABLED = _G.ESPAimConfig.Aimbot.Enabled
+local AIMBOT_TOGGLE_KEY = stringToKeyCode(_G.ESPAimConfig.Aimbot.ToggleKey)
+local SHOW_ALLIES_AIMBOT = _G.ESPAimConfig.Aimbot.TargetAllies
+
+-- Configurações do ESP
+local ESP_CONFIG = {
+    ENABLE_TEAM_CHECK = true,
+    
+    TEAM_COLORS = {
+        ENEMY = rgbToColor3(_G.ESPAimConfig.ESP.EnemyColor),
+        ALLY = rgbToColor3(_G.ESPAimConfig.ESP.AllyColor)
+    },
+    
+    BOX = {
+        THICKNESS = _G.ESPAimConfig.ESP.BoxThickness,
+        COLOR = rgbToColor3(_G.ESPAimConfig.ESP.BoxColor),
+        FILLED = false,
+        TRANSPARENCY = 1
+    },
+    HEALTHBAR = {
+        THICKNESS = 2,
+        COLOR_FULL = Color3.fromRGB(0, 255, 0),
+        COLOR_MID = Color3.fromRGB(255, 255, 0),
+        COLOR_LOW = Color3.fromRGB(255, 0, 0),
+        OFFSET = Vector2.new(-15, 0),
+        WIDTH = 8
+    },
+    HEALTH_TEXT = {
+        COLOR = Color3.fromRGB(255, 255, 255),
+        SIZE = 14,
+        OFFSET = Vector2.new(0, -20)
+    }
+}
+
+-- Configurações do Aimbot
+local AimbotSettings = {
+    SHOW_ALLIES = SHOW_ALLIES_AIMBOT,
+    ENABLE_TEAM_CHECK = true,
+    
+    FOV = {
+        Radius = _G.ESPAimConfig.Aimbot.FOVRadius,
+        Color = rgbToColor3(_G.ESPAimConfig.Aimbot.FOVColor),
+        Transparency = _G.ESPAimConfig.Aimbot.FOVTransparency,
+        Filled = false,
+        Thickness = 1,
+        Visible = _G.ESPAimConfig.Aimbot.FOVVisible
+    },
+    
+    AIM_PART = _G.ESPAimConfig.Aimbot.AimPart
+}
+
+-- Armazenamento dos elementos ESP
+local espElements = {}
+local aiming = false
+
+-- Criando o círculo FOV para o Aimbot
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Radius = AimbotSettings.FOV.Radius
+FOVCircle.Color = AimbotSettings.FOV.Color
+FOVCircle.Transparency = AimbotSettings.FOV.Transparency
+FOVCircle.Filled = AimbotSettings.FOV.Filled
+FOVCircle.Thickness = AimbotSettings.FOV.Thickness
+FOVCircle.Visible = AIMBOT_ENABLED and AimbotSettings.FOV.Visible
+
+-- Função para verificar se dois jogadores estão na mesma equipe
+local function isSameTeam(player1, player2)
+    -- Verificar pela propriedade TeamColor
+    if player1.Team and player2.Team then
+        return player1.Team == player2.Team
+    end
+    
+    -- Verificar pelo valor da propriedade .Neutral
+    if player1.Team and player2.Team then
+        if player1.Team.Name == "Neutral" or player2.Team.Name == "Neutral" then
+            return false
+        end
+    end
+    
+    -- Verificar por propriedades personalizadas
+    if player1.Character and player2.Character then
+        local teamValue1 = player1.Character:FindFirstChild("TeamValue")
+        local teamValue2 = player2.Character:FindFirstChild("TeamValue")
+        
+        if teamValue1 and teamValue2 and teamValue1:IsA("IntValue") and teamValue2:IsA("IntValue") then
+            return teamValue1.Value == teamValue2.Value
+        end
+    end
+    
+    return false
+end
+
+-- ==== FUNÇÕES ESP ====
+
+-- Função para obter a cor com base na equipe
+local function getTeamColor(player)
+    if ESP_CONFIG.ENABLE_TEAM_CHECK then
+        if isSameTeam(player, LocalPlayer) then
+            return ESP_CONFIG.TEAM_COLORS.ALLY
+        else
+            return ESP_CONFIG.TEAM_COLORS.ENEMY
+        end
+    else
+        return ESP_CONFIG.BOX.COLOR
+    end
+end
+
+-- Função para verificar se devemos mostrar o ESP para o jogador
+local function shouldShowESP(player)
+    if not ESP_ENABLED then return false end
+    
+    if not ESP_CONFIG.ENABLE_TEAM_CHECK then
+        return true
+    end
+    
+    if isSameTeam(player, LocalPlayer) then
+        return SHOW_ALLIES_ESP
+    end
+    
+    return true
+end
+
+-- Função para criar um novo elemento ESP para um jogador
+local function createESP(player)
+    if not player.Character or player == LocalPlayer then return end
+    
+    -- Criar elementos visuais
+    local boxElement = Drawing.new("Square")
+    local healthBarOutline = Drawing.new("Square")
+    local healthBarFill = Drawing.new("Square")
+    local playerNameText = Drawing.new("Text")
+    
+    -- Configurar caixa ESP com cor baseada na equipe
+    boxElement.Thickness = ESP_CONFIG.BOX.THICKNESS
+    boxElement.Color = getTeamColor(player)
+    boxElement.Filled = ESP_CONFIG.BOX.FILLED
+    boxElement.Transparency = ESP_CONFIG.BOX.TRANSPARENCY
+    
+    -- Configurar contorno da barra de vida
+    healthBarOutline.Thickness = 1
+    healthBarOutline.Color = Color3.fromRGB(0, 0, 0)
+    healthBarOutline.Filled = false
+    healthBarOutline.Transparency = 1
+    
+    -- Configurar preenchimento da barra de vida
+    healthBarFill.Thickness = 1
+    healthBarFill.Filled = true
+    healthBarFill.Transparency = 1
+    
+    -- Configurar texto do nome do jogador
+    playerNameText.Center = true
+    playerNameText.Size = ESP_CONFIG.HEALTH_TEXT.SIZE
+    playerNameText.Color = ESP_CONFIG.HEALTH_TEXT.COLOR
+    playerNameText.Outline = true
+    playerNameText.Font = Drawing.Fonts.UI
+    
+    -- Adicionar indicação da equipe ao nome
+    local teamIndicator = ""
+    if ESP_CONFIG.ENABLE_TEAM_CHECK then
+        if isSameTeam(player, LocalPlayer) then
+            teamIndicator = " [ALIADO]"
+        else
+            teamIndicator = " [INIMIGO]"
+        end
+    end
+    playerNameText.Text = player.Name .. teamIndicator
+    
+    -- Armazenar os elementos
+    espElements[player] = {
+        box = boxElement,
+        healthBarOutline = healthBarOutline,
+        healthBarFill = healthBarFill,
+        playerNameText = playerNameText,
+        lastHealth = 100
+    }
+end
+
+-- Função para remover o ESP de um jogador
+local function removeESP(player)
+    if espElements[player] then
+        for _, element in pairs(espElements[player]) do
+            if typeof(element) ~= "number" and element.Remove then
+                element:Remove()
+            end
+        end
+        espElements[player] = nil
+    end
+end
+
+-- Função para obter a cor da barra de vida com base na porcentagem
+local function getHealthColor(healthPercent)
+    if healthPercent > 0.7 then
+        return ESP_CONFIG.HEALTHBAR.COLOR_FULL
+    elseif healthPercent > 0.3 then
+        return ESP_CONFIG.HEALTHBAR.COLOR_MID
+    else
+        return ESP_CONFIG.HEALTHBAR.COLOR_LOW
+    end
+end
+
+-- Função para atualizar o ESP
+local function updateESP()
+    for player, elements in pairs(espElements) do
+        -- Verificar se o jogador tem um personagem e se todos os componentes necessários existem
+        if player.Character and 
+           player.Character:FindFirstChild("HumanoidRootPart") and 
+           player.Character:FindFirstChild("Head") and
+           player.Character:FindFirstChild("Humanoid") then
+            
+            -- Verificar se devemos mostrar o ESP para este jogador
+            if not shouldShowESP(player) then
+                elements.box.Visible = false
+                elements.healthBarOutline.Visible = false
+                elements.healthBarFill.Visible = false
+                elements.playerNameText.Visible = false
+                continue
+            end
+            
+            local humanoid = player.Character.Humanoid
+            local humanoidRootPart = player.Character.HumanoidRootPart
+            local head = player.Character.Head
+            
+            -- Obter informações de vida
+            local health = humanoid.Health
+            local maxHealth = humanoid.MaxHealth
+            
+            -- Remover ESP se a vida for igual ou menor que 0
+            if health <= 0 then
+                elements.box.Visible = false
+                elements.healthBarOutline.Visible = false
+                elements.healthBarFill.Visible = false
+                elements.playerNameText.Visible = false
+                continue
+            end
+            
+            -- Converter posições 3D para 2D
+            local rootPos, onScreen = Camera:WorldToViewportPoint(humanoidRootPart.Position)
+            local headPos = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 1, 0))
+            local legsPos = Camera:WorldToViewportPoint(humanoidRootPart.Position - Vector3.new(0, 3, 0))
+            
+            if onScreen then
+                -- Atualizar a cor baseada na equipe (caso ela tenha mudado)
+                elements.box.Color = getTeamColor(player)
+                
+                -- Calcular dimensões do ESP
+                local boxHeight = math.abs(headPos.Y - legsPos.Y)
+                local boxWidth = boxHeight * 0.75
+                
+                -- Posição e tamanho da caixa
+                elements.box.Size = Vector2.new(boxWidth, boxHeight)
+                elements.box.Position = Vector2.new(rootPos.X - boxWidth / 2, headPos.Y)
+                elements.box.Visible = true
+                
+                -- Mostrar barra de vida apenas se configurado
+                if _G.ESPAimConfig.ESP.ShowHealthBar then
+                    local healthPercent = health / maxHealth
+                    
+                    -- Posição e tamanho da barra de vida
+                    local healthBarHeight = boxHeight
+                    local healthBarPos = Vector2.new(
+                        elements.box.Position.X + ESP_CONFIG.HEALTHBAR.OFFSET.X,
+                        elements.box.Position.Y
+                    )
+                    
+                    -- Configurar contorno da barra de vida
+                    elements.healthBarOutline.Size = Vector2.new(
+                        ESP_CONFIG.HEALTHBAR.WIDTH, 
+                        healthBarHeight
+                    )
+                    elements.healthBarOutline.Position = healthBarPos
+                    elements.healthBarOutline.Visible = true
+                    
+                    -- Configurar preenchimento da barra de vida
+                    elements.healthBarFill.Size = Vector2.new(
+                        ESP_CONFIG.HEALTHBAR.WIDTH - 2,
+                        (healthBarHeight - 2) * healthPercent
+                    )
+                    elements.healthBarFill.Position = Vector2.new(
+                        healthBarPos.X + 1,
+                        healthBarPos.Y + (healthBarHeight - 2) * (1 - healthPercent) + 1
+                    )
+                    elements.healthBarFill.Color = getHealthColor(healthPercent)
+                    elements.healthBarFill.Visible = true
+                else
+                    elements.healthBarOutline.Visible = false
+                    elements.healthBarFill.Visible = false
+                end
+                
+                -- Mostrar nome do jogador apenas se configurado
+                if _G.ESPAimConfig.ESP.ShowPlayerName then
+                    elements.playerNameText.Position = Vector2.new(
+                        rootPos.X,
+                        elements.box.Position.Y + ESP_CONFIG.HEALTH_TEXT.OFFSET.Y
+                    )
+                    elements.playerNameText.Visible = true
+                else
+                    elements.playerNameText.Visible = false
+                end
+                
+                -- Armazenar a última vida conhecida
+                elements.lastHealth = health
+            else
+                -- Esconder todos os elementos se estiver fora da tela
+                elements.box.Visible = false
+                elements.healthBarOutline.Visible = false
+                elements.healthBarFill.Visible = false
+                elements.playerNameText.Visible = false
+            end
+        else
+            -- Esconder os elementos se o personagem não existir
+            elements.box.Visible = false
+            elements.healthBarOutline.Visible = false
+            elements.healthBarFill.Visible = false
+            elements.playerNameText.Visible = false
+        end
+    end
+end
+
+-- ==== FUNÇÕES AIMBOT ====
+
+-- Função para verificar se devemos mirar no jogador
+local function shouldAimAtPlayer(player)
+    if not AimbotSettings.ENABLE_TEAM_CHECK then
+        return true
+    end
+    
+    if isSameTeam(player, LocalPlayer) then
+        return AimbotSettings.SHOW_ALLIES
+    end
+    
+    return true
+end
+
+-- Função para verificar se um jogador está dentro do FOV
+local function isPlayerInFOV(player)
+    if not AIMBOT_ENABLED then return false end
+    if player == LocalPlayer then return false end
+    if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return false end
+    if not player.Character:FindFirstChild("Humanoid") or player.Character.Humanoid.Health <= 0 then return false end
+    
+    -- Verificar se devemos mirar neste jogador com base na equipe
+    if not shouldAimAtPlayer(player) then return false end
+    
+    local hrp = player.Character.HumanoidRootPart
+    local vector, onScreen = Camera:WorldToScreenPoint(hrp.Position)
+    
+    if not onScreen then return false end
+    
+    local centerX = Camera.ViewportSize.X / 2
+    local centerY = Camera.ViewportSize.Y / 2
+    
+    local distance = math.sqrt((vector.X - centerX)^2 + (vector.Y - centerY)^2)
+    
+    return distance <= AimbotSettings.FOV.Radius
+end
+
+-- Função para encontrar o jogador mais próximo dentro do FOV
+local function getClosestPlayerInFOV()
+    if not AIMBOT_ENABLED then return nil end
+    
+    local closestPlayer = nil
+    local shortestDistance = math.huge
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if isPlayerInFOV(player) then
+            if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then continue end
+            if not player.Character:FindFirstChild("Humanoid") or player.Character.Humanoid.Health <= 0 then continue end
+            if not player.Character:FindFirstChild(AimbotSettings.AIM_PART) then continue end
+            
+            local distance = (player.Character.HumanoidRootPart.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
+            
+            if distance < shortestDistance then
+                closestPlayer = player
+                shortestDistance = distance
+            end
+        end
+    end
+    
+    return closestPlayer
+end
+
+-- ==== INICIALIZAÇÃO E EVENTOS ====
+
+-- Inicializar ESP para jogadores existentes
+for _, player in ipairs(Players:GetPlayers()) do
+    if player ~= LocalPlayer then
+        createESP(player)
+        
+        -- Conectar à adição de personagem caso o jogador ainda não tenha um
+        player.CharacterAdded:Connect(function()
+            removeESP(player)
+            createESP(player)
+        end)
+    end
+end
+
+-- Criar ESP para novos jogadores
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function()
+        removeESP(player)
+        createESP(player)
+    end)
+end)
+
+-- Remover ESP quando o jogador sai
+Players.PlayerRemoving:Connect(function(player)
+    removeESP(player)
+end)
+
+-- Lidar com mudanças de equipe (para atualizar cores)
+local function handleTeamChange(player)
+    if espElements[player] then
+        -- Atualizar a cor da caixa
+        espElements[player].box.Color = getTeamColor(player)
+        
+        -- Atualizar o texto (para mostrar equipe)
+        local teamIndicator = ""
+        if ESP_CONFIG.ENABLE_TEAM_CHECK then
+            if isSameTeam(player, LocalPlayer) then
+                teamIndicator = " [ALIADO]"
+            else
+                teamIndicator = " [INIMIGO]"
+            end
+        end
+        espElements[player].playerNameText.Text = player.Name .. teamIndicator
+    end
+end
+
+-- Conectar ao evento de mudança de equipe para todos os jogadores
+for _, player in ipairs(Players:GetPlayers()) do
+    if player ~= LocalPlayer then
+        player:GetPropertyChangedSignal("Team"):Connect(function()
+            handleTeamChange(player)
+        end)
+    end
+end
+
+-- Conectar ao evento de mudança de equipe para novos jogadores
+Players.PlayerAdded:Connect(function(player)
+    player:GetPropertyChangedSignal("Team"):Connect(function()
+        handleTeamChange(player)
+    end)
+end)
+
+-- Lidar com mudança de equipe do jogador local
+LocalPlayer:GetPropertyChangedSignal("Team"):Connect(function()
+    -- Atualizar todas as cores quando o jogador local muda de equipe
+    for player, _ in pairs(espElements) do
+        handleTeamChange(player)
+    end
+end)
+
+-- Atualizar a posição do círculo de FOV
+RunService.RenderStepped:Connect(function()
+    FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    FOVCircle.Visible = AIMBOT_ENABLED and AimbotSettings.FOV.Visible
+end)
+
+-- Toggle do ESP com tecla
+UserInputService.InputBegan:Connect(function(input, processed)
+    if not processed and input.KeyCode == ESP_TOGGLE_KEY then
+        ESP_ENABLED = not ESP_ENABLED
+        if ESP_ENABLED then
+            print("ESP: Ativado")
+        else
+            print("ESP: Desativado")
+        end
+    end
+end)
+
+-- Toggle do AimBot com tecla
+UserInputService.InputBegan:Connect(function(input, processed)
+    if not processed and input.KeyCode == AIMBOT_TOGGLE_KEY then
+        AIMBOT_ENABLED = not AIMBOT_ENABLED
+        FOVCircle.Visible = AIMBOT_ENABLED and AimbotSettings.FOV.Visible
+        if AIMBOT_ENABLED then
+            print("AimBot: Ativado")
+        else
+            print("AimBot: Desativado")
+        end
+    end
+end)
+
+-- Detecta o clique do botão direito do mouse
+UserInputService.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        aiming = true
+        
+        -- Inicia um loop para verificar o estado do jogador focado continuamente
+        task.spawn(function()
+            while aiming do
+                if not AIMBOT_ENABLED then 
+                    task.wait(0.1)
+                    continue 
+                end
+                
+                local closestPlayer = getClosestPlayerInFOV()
+                
+                if closestPlayer and closestPlayer.Character and 
+                   closestPlayer.Character:FindFirstChild("Humanoid") and 
+                   closestPlayer.Character.Humanoid.Health > 0 and
+                   closestPlayer.Character:FindFirstChild(AimbotSettings.AIM_PART) then
+                    
+                    Camera.CFrame = CFrame.new(Camera.CFrame.Position, closestPlayer.Character[AimbotSettings.AIM_PART].Position)
+                end
+                
+                if not aiming then
+                    break
+                end
+                
+                task.wait(0.01)
+            end
+        end)
+    end
+end)
+
+-- Detecta a liberação do botão direito do mouse
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        aiming = false
+    end
+end)
+
+-- Atualizar o ESP a cada frame
+RunService.RenderStepped:Connect(updateESP)
+
+-- Limpar quando o script é destruído
+game.Players.LocalPlayer.CharacterRemoving:Connect(function()
+    FOVCircle:Remove()
+    for player, _ in pairs(espElements) do
+        removeESP(player)
+    end
+end)
+
+-- Notificação de inicialização
+print("ESP e Aimbot carregados com sucesso!")
+print("Pressione '" .. _G.ESPAimConfig.ESP.ToggleKey .. "' para ativar/desativar o ESP")
+print("Pressione '" .. _G.ESPAimConfig.Aimbot.ToggleKey .. "' para ativar/desativar o Aimbot")
