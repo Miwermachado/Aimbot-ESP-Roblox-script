@@ -1,0 +1,229 @@
+-- Converter teclas de string para KeyCode
+local function stringToKeyCode(keyString)
+    return Enum.KeyCode[keyString]
+end
+
+-- Converter arrays RGB para Color3
+local function rgbToColor3(rgbArray)
+    return Color3.fromRGB(rgbArray[1], rgbArray[2], rgbArray[3])
+end
+
+-- Serviços
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+-- Variáveis locais
+local Camera = workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+local aiming = false
+local AIMBOT_ENABLED = _G.AimbotConfig.Enabled
+local AIMBOT_TOGGLE_KEY = stringToKeyCode(_G.AimbotConfig.ToggleKey)
+
+-- Configurações processadas
+local AimbotSettings = {
+    SHOW_ALLIES = _G.AimbotConfig.TargetAllies,
+    ENABLE_TEAM_CHECK = _G.AimbotConfig.TeamCheck,
+    
+    FOV = {
+        Radius = _G.AimbotConfig.FOVRadius,
+        Color = rgbToColor3(_G.AimbotConfig.FOVColor),
+        Transparency = _G.AimbotConfig.FOVTransparency,
+        Filled = false,
+        Thickness = _G.AimbotConfig.FOVThickness,
+        Visible = _G.AimbotConfig.FOVVisible
+    },
+    
+    AIM_PART = _G.AimbotConfig.AimPart,
+    SMOOTH_AIM = _G.AimbotConfig.SmoothAim,
+    SMOOTH_AMOUNT = _G.AimbotConfig.SmoothAmount
+}
+
+-- Criando o círculo FOV para o Aimbot
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Radius = AimbotSettings.FOV.Radius
+FOVCircle.Color = AimbotSettings.FOV.Color
+FOVCircle.Transparency = AimbotSettings.FOV.Transparency
+FOVCircle.Filled = AimbotSettings.FOV.Filled
+FOVCircle.Thickness = AimbotSettings.FOV.Thickness
+FOVCircle.Visible = AIMBOT_ENABLED and AimbotSettings.FOV.Visible
+
+-- Função para verificar se dois jogadores estão na mesma equipe
+local function isSameTeam(player1, player2)
+    -- Verificar pela propriedade TeamColor
+    if player1.Team and player2.Team then
+        return player1.Team == player2.Team
+    end
+    
+    -- Verificar pelo valor da propriedade .Neutral
+    if player1.Team and player2.Team then
+        if player1.Team.Name == "Neutral" or player2.Team.Name == "Neutral" then
+            return false
+        end
+    end
+    
+    -- Verificar por propriedades personalizadas
+    if player1.Character and player2.Character then
+        local teamValue1 = player1.Character:FindFirstChild("TeamValue")
+        local teamValue2 = player2.Character:FindFirstChild("TeamValue")
+        
+        if teamValue1 and teamValue2 and teamValue1:IsA("IntValue") and teamValue2:IsA("IntValue") then
+            return teamValue1.Value == teamValue2.Value
+        end
+    end
+    
+    return false
+end
+
+-- Função para verificar se devemos mirar no jogador
+local function shouldAimAtPlayer(player)
+    if not AimbotSettings.ENABLE_TEAM_CHECK then
+        return true
+    end
+    
+    if isSameTeam(player, LocalPlayer) then
+        return AimbotSettings.SHOW_ALLIES
+    end
+    
+    return true
+end
+
+-- Função para verificar se um jogador está dentro do FOV
+local function isPlayerInFOV(player)
+    if not AIMBOT_ENABLED then return false end
+    if player == LocalPlayer then return false end
+    if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return false end
+    if not player.Character:FindFirstChild("Humanoid") or player.Character.Humanoid.Health <= 0 then return false end
+    if not player.Character:FindFirstChild(AimbotSettings.AIM_PART) then return false end
+    
+    -- Verificar se devemos mirar neste jogador com base na equipe
+    if not shouldAimAtPlayer(player) then return false end
+    
+    local hrp = player.Character.HumanoidRootPart
+    local vector, onScreen = Camera:WorldToScreenPoint(hrp.Position)
+    
+    if not onScreen then return false end
+    
+    local centerX = Camera.ViewportSize.X / 2
+    local centerY = Camera.ViewportSize.Y / 2
+    
+    local distance = math.sqrt((vector.X - centerX)^2 + (vector.Y - centerY)^2)
+    
+    return distance <= AimbotSettings.FOV.Radius
+end
+
+-- Função para encontrar o jogador mais próximo dentro do FOV
+local function getClosestPlayerInFOV()
+    if not AIMBOT_ENABLED then return nil end
+    
+    local closestPlayer = nil
+    local shortestDistance = math.huge
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if isPlayerInFOV(player) then
+            if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then continue end
+            if not player.Character:FindFirstChild("Humanoid") or player.Character.Humanoid.Health <= 0 then continue end
+            if not player.Character:FindFirstChild(AimbotSettings.AIM_PART) then continue end
+            
+            local distance = (player.Character.HumanoidRootPart.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
+            
+            if distance < shortestDistance then
+                closestPlayer = player
+                shortestDistance = distance
+            end
+        end
+    end
+    
+    return closestPlayer
+end
+
+-- Função para suavizar a mira
+local function smoothAim(currentCFrame, targetPosition)
+    if not AimbotSettings.SMOOTH_AIM then
+        return CFrame.new(currentCFrame.Position, targetPosition)
+    end
+    
+    local smoothFactor = AimbotSettings.SMOOTH_AMOUNT
+    
+    -- Calcular direção atual
+    local currentLookVector = currentCFrame.LookVector
+    
+    -- Calcular direção alvo
+    local targetLookVector = (targetPosition - currentCFrame.Position).Unit
+    
+    -- Interpolar entre as direções
+    local resultLookVector = currentLookVector:Lerp(targetLookVector, smoothFactor)
+    
+    -- Criar um novo CFrame com a direção interpolada
+    return CFrame.new(currentCFrame.Position, currentCFrame.Position + resultLookVector)
+end
+
+-- Atualiza a posição do círculo de FOV
+RunService.RenderStepped:Connect(function()
+    FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    FOVCircle.Visible = AIMBOT_ENABLED and AimbotSettings.FOV.Visible
+end)
+
+-- Toggle do AimBot com tecla
+UserInputService.InputBegan:Connect(function(input, processed)
+    if not processed and input.KeyCode == AIMBOT_TOGGLE_KEY then
+        AIMBOT_ENABLED = not AIMBOT_ENABLED
+        FOVCircle.Visible = AIMBOT_ENABLED and AimbotSettings.FOV.Visible
+        if AIMBOT_ENABLED then
+            print("AimBot: Ativado")
+        else
+            print("AimBot: Desativado")
+        end
+    end
+end)
+
+-- Detecta o clique do botão direito do mouse
+UserInputService.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        aiming = true
+        
+        -- Inicia um loop para verificar o estado do jogador focado continuamente
+        task.spawn(function()
+            while aiming do
+                if not AIMBOT_ENABLED then 
+                    task.wait(0.1)
+                    continue 
+                end
+                
+                local closestPlayer = getClosestPlayerInFOV()
+                
+                if closestPlayer and closestPlayer.Character and 
+                   closestPlayer.Character:FindFirstChild("Humanoid") and 
+                   closestPlayer.Character.Humanoid.Health > 0 and
+                   closestPlayer.Character:FindFirstChild(AimbotSettings.AIM_PART) then
+                    
+                    local targetPosition = closestPlayer.Character[AimbotSettings.AIM_PART].Position
+                    Camera.CFrame = smoothAim(Camera.CFrame, targetPosition)
+                end
+                
+                if not aiming then
+                    break
+                end
+                
+                task.wait(0.01)
+            end
+        end)
+    end
+end)
+
+-- Detecta a liberação do botão direito do mouse
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        aiming = false
+    end
+end)
+
+-- Limpa o círculo quando o script é destruído
+game.Players.LocalPlayer.CharacterRemoving:Connect(function()
+    FOVCircle:Remove()
+end)
+
+-- Notificação de inicialização
+print("Aimbot carregado com sucesso!")
+print("Pressione '" .. _G.AimbotConfig.ToggleKey .. "' para ativar/desativar o Aimbot")
+print("Segure o botão direito do mouse para ativar a mira automática")
