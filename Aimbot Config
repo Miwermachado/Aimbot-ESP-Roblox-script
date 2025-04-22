@@ -82,10 +82,10 @@ local function shouldAimAtPlayer(player)
     end
     
     if isSameTeam(player, LocalPlayer) then
-        return AimbotSettings.SHOW_ALLIES
+        return AimbotSettings.SHOW_ALLIES -- This returns false when TargetAllies is false
     end
     
-    return true
+    return true -- Non-team members (enemies) will always be targeted
 end
 
 -- Função para verificar se um jogador está dentro do FOV
